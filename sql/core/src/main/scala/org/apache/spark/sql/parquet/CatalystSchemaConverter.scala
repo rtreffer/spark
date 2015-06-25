@@ -169,11 +169,12 @@ private[parquet] class CatalystSchemaConverter(
         }
 
       case INT96 =>
-        CatalystSchemaConverter.analysisRequire(
-          assumeInt96IsTimestamp,
-          "INT96 is not supported unless it's interpreted as timestamp. " +
-            s"Please try to set ${SQLConf.PARQUET_INT96_AS_TIMESTAMP.key} to true.")
-        TimestampType
+        field.getOriginalType match {
+          case DECIMAL => makeDecimalType(maxPrecisionForBytes(12))
+          case _ if assumeInt96IsTimestamp => TimestampType
+          case null => makeDecimalType(maxPrecisionForBytes(12))
+          case _ => illegalType()
+        }
 
       case BINARY =>
         field.getOriginalType match {
@@ -373,8 +374,10 @@ private[parquet] class CatalystSchemaConverter(
 
       // Spark 1.4.x and prior versions only support decimals with a maximum precision of 18 and
       // always store decimals in fixed-length byte arrays.
+      // Always storing FIXED_LEN_BYTE_ARRAY is thus compatible with spark <= 1.4.x, except for
+      // precisions > 18.
       case DecimalType.Fixed(precision, scale)
-        if precision <= maxPrecisionForBytes(8) && !followParquetFormatSpec =>
+        if !followParquetFormatSpec =>
         Types
           .primitive(FIXED_LEN_BYTE_ARRAY, repetition)
           .as(DECIMAL)
@@ -383,20 +386,14 @@ private[parquet] class CatalystSchemaConverter(
           .length(minBytesForPrecision(precision))
           .named(field.name)
 
-      case dec @ DecimalType() if !followParquetFormatSpec =>
-        throw new AnalysisException(
-          s"Data type $dec is not supported. " +
-            s"When ${SQLConf.PARQUET_FOLLOW_PARQUET_FORMAT_SPEC.key} is set to false," +
-            "decimal precision and scale must be specified, " +
-            "and precision must be less than or equal to 18.")
-
       // =====================================
       // Decimals (follow Parquet format spec)
       // =====================================
 
-      // Uses INT32 for 1 <= precision <= 9
+      // Uses INT32 for 4 byte encodings / precision <= 9
       case DecimalType.Fixed(precision, scale)
-        if precision <= maxPrecisionForBytes(4) && followParquetFormatSpec =>
+        if followParquetFormatSpec && maxPrecisionForBytes(3) < precision && 
+          precision <= maxPrecisionForBytes(4) =>
         Types
           .primitive(INT32, repetition)
           .as(DECIMAL)
@@ -404,9 +401,10 @@ private[parquet] class CatalystSchemaConverter(
           .scale(scale)
           .named(field.name)
 
-      // Uses INT64 for 1 <= precision <= 18
+      // Uses INT64 for 8 byte encodings / precision <= 18
       case DecimalType.Fixed(precision, scale)
-        if precision <= maxPrecisionForBytes(8) && followParquetFormatSpec =>
+        if followParquetFormatSpec && maxPrecisionForBytes(7) < precision &&
+          precision <= maxPrecisionForBytes(8) =>
         Types
           .primitive(INT64, repetition)
           .as(DECIMAL)
@@ -562,4 +560,5 @@ private[parquet] object CatalystSchemaConverter {
       throw new AnalysisException(message)
     }
   }
+
 }

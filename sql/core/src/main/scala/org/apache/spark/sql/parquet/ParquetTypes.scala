@@ -43,15 +43,26 @@ private[parquet] object ParquetTypesConverter extends Logging {
   }
 
   /**
-   * Compute the FIXED_LEN_BYTE_ARRAY length needed to represent a given DECIMAL precision.
+   * BYTES_FOR_PRECISION computes the required bytes to store a value of a certain decimal
+   * precision.
    */
-  private[parquet] val BYTES_FOR_PRECISION = Array.tabulate[Int](38) { precision =>
-    var length = 1
+  private[parquet] def BYTES_FOR_PRECISION_COMPUTE(precision : Int) : Int = {
+    var length = (precision / math.log10(2) - 1).toInt / 8
     while (math.pow(2.0, 8 * length - 1) < math.pow(10.0, precision)) {
       length += 1
     }
     length
   }
+
+  private[parquet] def BYTES_FOR_PRECISION_STATIC =
+    (0 to 30).map(BYTES_FOR_PRECISION_COMPUTE).toArray
+
+  private[parquet] def BYTES_FOR_PRECISION(precision : Int) : Int =
+    if (precision < BYTES_FOR_PRECISION_STATIC.length) {
+      BYTES_FOR_PRECISION_STATIC(precision)
+    } else {
+      BYTES_FOR_PRECISION_COMPUTE(precision)
+    }
 
   def convertToAttributes(
       parquetSchema: MessageType,
